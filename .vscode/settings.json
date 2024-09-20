@@ -4,6 +4,7 @@
     ],
     "files.associations": {
         "cstdint": "c",
-        "string.h": "c"
+        "string.h": "c",
+        "stddef.h": "c"
     }
 }

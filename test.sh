@@ -3,17 +3,17 @@ set -e
 echo "With zig cc:"
 
 zig cc \
-    -O3 \
     -o ribboni \
+    -O3 \
     main.c
 
 time ./ribboni
 
 sudo perf stat -d -r 100 ./ribboni
 
-valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes ./ribboni
+# valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes ./ribboni
 
-rm cachegrind.out.*
+# rm cachegrind.out.*
 
 
 # echo "With gcc:"

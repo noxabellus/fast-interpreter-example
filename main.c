@@ -5,6 +5,7 @@
 #include <string.h>
 #include <inttypes.h>
 #include <time.h>
+#include <stdalign.h>
 
 #include "stb_ds.h"
 #include "stb_ds.c"
@@ -17,7 +18,7 @@
     #define ENUM_T(T) enum
 #endif
 
-typedef uint32_t BB_Instruction;
+typedef uint64_t BB_Instruction;
 typedef uint16_t BB_FunctionIndex;
 typedef uint16_t BB_GlobalIndex;
 typedef uint8_t BB_RegisterIndex;
@@ -54,14 +55,16 @@ typedef ENUM_T(uint8_t) {
 #define BB_I_ENCODE_3(op, a, b, c) (BB_I_ENCODE_2(op, a, b) | (((BB_Instruction) c) <<  8))
 #define BB_I_ENCODE_W0(op, w)      (BB_I_ENCODE_0(op) | (((BB_Instruction) w) << 24))
 #define BB_I_ENCODE_W1(op, w, a)   (BB_I_ENCODE_W0(op, w) | (((BB_Instruction) a) <<  8))
-#define BB_I_DECODE_OPCODE(op)     (op & 0xFF)
-#define BB_I_DECODE_A(op)          ((op >> 24) & 0xFF)
-#define BB_I_DECODE_B(op)          ((op >> 16) & 0xFF)
-#define BB_I_DECODE_C(op)          ((op >>  8) & 0xFF)
-#define BB_I_DECODE_W0(op)         ((op >> 24) & 0xFFFF)
-#define BB_I_DECODE_W1(op)         ((op >>  8) & 0xFF)
+
+#define BB_I_DECODE_OPCODE(op)     ((BB_OpCode) (op & 0xFF))
+#define BB_I_DECODE_A(op)          ((uint8_t)   ((op >> 24) & 0xFF))
+#define BB_I_DECODE_B(op)          ((uint8_t)   ((op >> 16) & 0xFF))
+#define BB_I_DECODE_C(op)          ((uint8_t)   ((op >>  8) & 0xFF))
+#define BB_I_DECODE_W0(op)         ((uint16_t)  ((op >> 24) & 0xFFFF))
+#define BB_I_DECODE_W1(op)         ((uint8_t)   ((op >>  8) & 0xFF))
+
 #define BB_ALIGNMENT_DELTA(base_address, alignment) ((alignment - (base_address % alignment)) % alignment)
-#define BB_CALC_ARG_SIZE(num_args) ((num_args + BB_ALIGNMENT_DELTA(num_args, 4)) / 4)
+#define BB_CALC_ARG_SIZE(num_args) ((num_args + BB_ALIGNMENT_DELTA(num_args, alignof(BB_Instruction))) / alignof(BB_Instruction))
 
 typedef struct {
     BB_InstructionPointer const* blocks;
@@ -84,24 +87,23 @@ typedef struct {
 } BB_Program;
 
 typedef struct {
-    BB_Function const* function;
-    BB_BlockFramePtr root_block;
-    BB_StackPtr stack_base;
-} BB_CallFrame;
-
-typedef struct {
     BB_Instruction const* instruction_pointer;
     BB_RegisterIndex out_index;
 } BB_BlockFrame;
 
 typedef struct {
+    BB_Function const* function;
+    BB_BlockFrame* root_block;
+    uint64_t* stack_base;
+} BB_CallFrame;
+
+typedef struct {
     BB_Program const* program;
     BB_CallFrame* call_stack;
-    BB_CallFramePtr call_frame_ptr;
+    BB_CallFrame* call_stack_max;
     uint64_t* data_stack;
-    BB_StackPtr data_stack_ptr;
+    uint64_t* data_stack_max;
     BB_BlockFrame* block_stack;
-    BB_BlockFramePtr block_frame_ptr;
 } BB_Fiber;
 
 typedef ENUM_T(uint8_t) {
@@ -124,13 +126,12 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
     BB_BlockFrame* current_block_frame;
     BB_Instruction last_instruction;
 
-    #define SET_CONTEXT() {                                                    \
-        BB_debug("BB_SET_CONTEXT");                                            \
-        current_call_frame = fiber->call_stack + fiber->call_frame_ptr - 1;    \
-        current_function = current_call_frame->function;                       \
-        current_block_frame = fiber->block_stack + fiber->block_frame_ptr - 1; \
-        BB_debug("\t%d %d", fiber->call_frame_ptr, fiber->block_frame_ptr);    \
-    }                                                                          \
+    #define SET_CONTEXT() {                                                 \
+        BB_debug("BB_SET_CONTEXT");                                         \
+        current_call_frame = fiber->call_stack;                             \
+        current_function = current_call_frame->function;                    \
+        current_block_frame = fiber->block_stack;                           \
+    }                                                                       \
 
     SET_CONTEXT();
 
@@ -147,15 +148,15 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         &&DO_RET_V,
     };
 
-    #define DECODE_NEXT()                                                                                                                   \
+    #define DECODE_NEXT()                                                \
         last_instruction = *(current_block_frame->instruction_pointer++) \
 
-    #define DISPATCH() {                                     \
-        DECODE_NEXT();                                       \
+    #define DISPATCH() {                                       \
+        DECODE_NEXT();                                         \
         BB_OpCode next = BB_I_DECODE_OPCODE(last_instruction); \
-        BB_debug("BB_DISPATCH %d", next);                    \
-        goto *DISPATCH_TABLE[next];                          \
-    }                                                        \
+        BB_debug("BB_DISPATCH %d", next);                      \
+        goto *DISPATCH_TABLE[next];                            \
+    }                                                          \
 
     #define DECODE_A()  BB_I_DECODE_A(last_instruction)
     #define DECODE_B()  BB_I_DECODE_B(last_instruction)
@@ -181,7 +182,7 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         BB_GlobalIndex index = DECODE_W0();
         BB_RegisterIndex destination = DECODE_W1();
 
-        *(fiber->data_stack + current_call_frame->stack_base + destination) =
+        *(current_call_frame->stack_base + destination) =
             *((uint64_t*) (fiber->program->global_memory + fiber->program->globals[index]));
         
         DISPATCH();
@@ -195,7 +196,7 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         BB_RegisterIndex condition = DECODE_C();
 
         BB_BlockIndex new_block_index;
-        if (*((uint8_t*) (fiber->data_stack + current_call_frame->stack_base + condition)) != 0) {
+        if (*((uint8_t*) (current_call_frame->stack_base + condition)) != 0) {
             new_block_index = then_index;
         } else {
             new_block_index = else_index;
@@ -204,8 +205,7 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         BB_InstructionPointer new_block = current_function->bytecode.blocks[new_block_index];
 
         BB_BlockFrame new_block_frame = {current_function->bytecode.instructions + new_block, 0};
-        fiber->block_stack[fiber->block_frame_ptr] = new_block_frame;
-        fiber->block_frame_ptr++;
+        *(++fiber->block_stack) = new_block_frame;
 
         SET_CONTEXT();
         DISPATCH();
@@ -218,9 +218,9 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         BB_RegisterIndex y = DECODE_B();
         BB_RegisterIndex z = DECODE_C();
 
-        *(fiber->data_stack + current_call_frame->stack_base + z) =
-            *(fiber->data_stack + current_call_frame->stack_base + x) +
-            *(fiber->data_stack + current_call_frame->stack_base + y);
+        *(current_call_frame->stack_base + z) =
+            *(current_call_frame->stack_base + x) +
+            *(current_call_frame->stack_base + y);
 
         DISPATCH();
     };
@@ -232,9 +232,9 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         BB_RegisterIndex y = DECODE_B();
         BB_RegisterIndex z = DECODE_C();
 
-        *(fiber->data_stack + current_call_frame->stack_base + z) =
-            *(fiber->data_stack + current_call_frame->stack_base + x) -
-            *(fiber->data_stack + current_call_frame->stack_base + y);
+        *(current_call_frame->stack_base + z) =
+            *(current_call_frame->stack_base + x) -
+            *(current_call_frame->stack_base + y);
         
         DISPATCH();
     };
@@ -246,9 +246,9 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         BB_RegisterIndex y = DECODE_B();
         BB_RegisterIndex z = DECODE_C();
 
-        *((uint8_t*) (fiber->data_stack + current_call_frame->stack_base + z)) =
-            *(fiber->data_stack + current_call_frame->stack_base + x) <
-            *(fiber->data_stack + current_call_frame->stack_base + y);
+        *((uint8_t*) (current_call_frame->stack_base + z)) =
+            *(current_call_frame->stack_base + x) <
+            *(current_call_frame->stack_base + y);
 
         DISPATCH();
     };
@@ -263,31 +263,29 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
 
         BB_debug("\t%d %d %d", functionIndex, out, new_function->num_args);
 
-        if ( fiber->call_frame_ptr >= BB_MAX_CALL_FRAMES
-           | fiber->data_stack_ptr + new_function->num_registers >= BB_STACK_SIZE
+        if ( fiber->call_stack >= fiber->call_stack_max
+           | fiber->data_stack + new_function->num_registers >= fiber->data_stack_max
            ) {
             return BB_TRAP_STACK_OVERFLOW;
         }
         
-        BB_StackPtr new_stack_base = fiber->data_stack_ptr;
+        uint64_t* new_stack_base = fiber->data_stack;
 
         BB_RegisterIndex const* args = (BB_RegisterIndex const*) (current_block_frame->instruction_pointer);
         current_block_frame->instruction_pointer += BB_CALC_ARG_SIZE(new_function->num_args);
 
         for (BB_RegisterIndex i = 0; i < new_function->num_args; i++) {
-            *(fiber->data_stack + new_stack_base + i) =
-                *(fiber->data_stack + current_call_frame->stack_base + args[i]);
+            *(new_stack_base + i) =
+                *(current_call_frame->stack_base + args[i]);
         }
 
-        BB_CallFrame new_call_frame = {new_function, fiber->block_frame_ptr, new_stack_base};
-        fiber->call_stack[fiber->call_frame_ptr] = new_call_frame;
-        fiber->call_frame_ptr++;
-
         BB_BlockFrame new_block_frame = {new_function->bytecode.instructions + *new_function->bytecode.blocks, out};
-        fiber->block_stack[fiber->block_frame_ptr] = new_block_frame;
-        fiber->block_frame_ptr++;
+        *(++fiber->block_stack) = new_block_frame;
 
-        fiber->data_stack_ptr += new_function->num_registers;
+        BB_CallFrame new_call_frame = {new_function, fiber->block_stack, new_stack_base};
+        *(++fiber->call_stack) = new_call_frame;
+
+        fiber->data_stack += new_function->num_registers;
 
         SET_CONTEXT();
         DISPATCH();
@@ -298,15 +296,15 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
 
         BB_RegisterIndex y = DECODE_A();
 
-        BB_BlockFrame* root_block = fiber->block_stack + current_call_frame->root_block;
-        BB_CallFrame* caller_frame = fiber->call_stack + fiber->call_frame_ptr - 2;
+        BB_BlockFrame* root_block = current_call_frame->root_block;
+        BB_CallFrame* caller_frame = fiber->call_stack - 1;
 
-        *(fiber->data_stack + caller_frame->stack_base + root_block->out_index) =
-            *(fiber->data_stack + current_call_frame->stack_base + y);
+        *(caller_frame->stack_base + root_block->out_index) =
+            *(current_call_frame->stack_base + y);
 
-        fiber->call_frame_ptr--;
-        fiber->block_frame_ptr = current_call_frame->root_block;
-        fiber->data_stack_ptr = current_call_frame->stack_base;
+        fiber->call_stack--;
+        fiber->block_stack = current_call_frame->root_block - 1;
+        fiber->data_stack = current_call_frame->stack_base;
 
         SET_CONTEXT();
         DISPATCH();
@@ -318,8 +316,8 @@ BB_Trap BB_invoke(BB_Fiber *restrict fiber, BB_FunctionIndex functionIndex, uint
 
     BB_Function const* function = fiber->program->functions + functionIndex;
 
-    if ( fiber->call_frame_ptr + 2 > BB_MAX_CALL_FRAMES
-       | fiber->data_stack_ptr + function->num_registers + 1 > BB_STACK_SIZE
+    if ( fiber->call_stack + 2 >= fiber->call_stack_max
+       | fiber->data_stack + function->num_registers + 1 >= fiber->data_stack_max
        ) {
         return BB_TRAP_STACK_OVERFLOW;
     }
@@ -331,38 +329,34 @@ BB_Trap BB_invoke(BB_Fiber *restrict fiber, BB_FunctionIndex functionIndex, uint
 
     BB_Function wrapper = {0, 1, wrapper_bytecode};
 
-    BB_CallFrame wrapper_call_frame = {&wrapper, fiber->block_frame_ptr, fiber->data_stack_ptr};
-    fiber->call_stack[fiber->call_frame_ptr] = wrapper_call_frame;
-    fiber->call_frame_ptr++;
-
     BB_BlockFrame wrapper_block_frame = {wrapper_instructions, 0};
-    fiber->block_stack[fiber->block_frame_ptr] = wrapper_block_frame;
-    fiber->block_frame_ptr++;
+    *(++fiber->block_stack) = wrapper_block_frame;
 
-    fiber->data_stack_ptr += 1;
-    
-    BB_CallFrame call_frame = {function, fiber->block_frame_ptr, fiber->data_stack_ptr};
-    fiber->call_stack[fiber->call_frame_ptr] = call_frame;
-    fiber->call_frame_ptr++;
+    BB_CallFrame wrapper_call_frame = {&wrapper, fiber->block_stack, fiber->data_stack};
+    *(++fiber->call_stack) = wrapper_call_frame;
+
+    fiber->data_stack += 1;
 
     BB_BlockFrame block_frame = {function->bytecode.instructions + *function->bytecode.blocks, 0};
-    fiber->block_stack[fiber->block_frame_ptr] = block_frame;
-    fiber->block_frame_ptr++;
+    *(++fiber->block_stack) = block_frame;
+    
+    BB_CallFrame call_frame = {function, fiber->block_stack, fiber->data_stack};
+    *(++fiber->call_stack) = call_frame;
 
-    fiber->data_stack_ptr += function->num_registers;
+    fiber->data_stack += function->num_registers;
 
     for (uint8_t i = 0; i < function->num_args; i++) {
-        *(fiber->data_stack + call_frame.stack_base + i) = args[i];
+        *(call_frame.stack_base + i) = args[i];
     }
 
 
     BB_Trap result = BB_eval(fiber);
 
     if (result == BB_OKAY) {
-        *ret_val = *((uint64_t*) (fiber->data_stack + wrapper_call_frame.stack_base));
-        fiber->call_frame_ptr--;
-        fiber->block_frame_ptr--;
-        fiber->data_stack_ptr -= 1;
+        *ret_val = *((uint64_t*) (wrapper_call_frame.stack_base));
+        fiber->call_stack--;
+        fiber->block_stack--;
+        fiber->data_stack -= 1;
     }
 
     return result;
@@ -387,11 +381,8 @@ typedef stbds_arr(uint8_t) BB_Encoder;
 
 BB_InstructionPointer BB_encode_instr (BB_Encoder* encoder, BB_Instruction instr) {
     uint8_t* bytes = (uint8_t*) &instr;
-    BB_InstructionPointer offset = stbds_arrlenu(*encoder) / 4;
-    stbds_arrpush(*encoder, bytes[0]);
-    stbds_arrpush(*encoder, bytes[1]);
-    stbds_arrpush(*encoder, bytes[2]);
-    stbds_arrpush(*encoder, bytes[3]);
+    BB_InstructionPointer offset = stbds_arrlenu(*encoder) / sizeof(BB_Instruction);
+    for (size_t i = 0; i < sizeof(BB_Instruction); i++) stbds_arrpush(*encoder, bytes[i]);
     return offset;
 }
 
@@ -440,7 +431,7 @@ BB_InstructionPointer BB_encode_w1 (BB_Encoder* encoder, BB_OpCode opcode, uint1
 
 void BB_encode_registers (BB_Encoder* encoder, BB_RegisterIndex num_registers, BB_RegisterIndex* indices) {
     for (size_t i = 0; i < num_registers; i++) stbds_arrpush(*encoder, indices[i]);
-    size_t padding = BB_ALIGNMENT_DELTA(num_registers, 4);
+    size_t padding = BB_ALIGNMENT_DELTA(num_registers, alignof(BB_Instruction));
     BB_debug("encoded %d registers:", num_registers);
     for (size_t i = 0; i < num_registers; i++) BB_debug("\tr%d", indices[i]);
     BB_debug("adding %lu padding", padding);
@@ -610,18 +601,17 @@ int main (int argc, char** argv) {
         .num_globals = 2,
     };
 
-    uint64_t* data_stack = malloc(1024 * 1024);
-    BB_CallFrame* call_stack = malloc(sizeof(BB_CallFrame) * 1024);
-    BB_BlockFrame* block_stack = malloc(sizeof(BB_BlockFrame) * 1024 * 256);
+    uint64_t* data_stack = malloc(BB_STACK_SIZE);
+    BB_CallFrame* call_stack = malloc(sizeof(BB_CallFrame) * BB_MAX_CALL_FRAMES);
+    BB_BlockFrame* block_stack = malloc(sizeof(BB_BlockFrame) * BB_MAX_CALL_FRAMES * BB_MAX_BLOCKS);
 
     BB_Fiber fiber = {
         .program = &program,
         .call_stack = call_stack,
-        .call_frame_ptr = 0,
+        .call_stack_max = call_stack + BB_MAX_CALL_FRAMES,
         .block_stack = block_stack,
-        .block_frame_ptr = 0,
         .data_stack = data_stack,
-        .data_stack_ptr = 0,
+        .data_stack_max = data_stack + BB_STACK_SIZE,
     };
 
     uint64_t ret_val = 0xdeadbeef;
