@@ -79,8 +79,6 @@ typedef struct {
 
 typedef struct {
     BB_Function const* functions;
-    BB_FunctionIndex num_functions;
-
     uint8_t* const* globals;
 } BB_Program;
 
@@ -580,7 +578,6 @@ int main (int argc, char** argv) {
 
     BB_Program program = {
         .functions = &function,
-        .num_functions = 1,
         .globals = globals,
     };
 
