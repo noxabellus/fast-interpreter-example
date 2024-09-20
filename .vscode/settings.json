@@ -1,0 +1,9 @@
+{
+    "cSpell.words": [
+        "Upvalue"
+    ],
+    "files.associations": {
+        "cstdint": "c",
+        "string.h": "c"
+    }
+}
