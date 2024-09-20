@@ -124,17 +124,26 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
     BB_CallFrame* current_call_frame;
     BB_Function const* current_function;
     BB_BlockFrame* current_block_frame;
-    BB_Instruction last_instruction;
 
-    #define SET_CONTEXT() {                                                 \
-        BB_debug("BB_SET_CONTEXT");                                         \
-        current_call_frame = fiber->call_stack;                             \
-        current_function = current_call_frame->function;                    \
-        current_block_frame = fiber->block_stack;                           \
-    }                                                                       \
+    #define SET_CONTEXT() {                              \
+        BB_debug("BB_SET_CONTEXT");                      \
+        current_call_frame = fiber->call_stack;          \
+        current_function = current_call_frame->function; \
+        current_block_frame = fiber->block_stack;        \
+    }                                                    \
 
     SET_CONTEXT();
 
+    BB_Instruction last_instruction;
+
+    #define DECODE_NEXT()                                                \
+        last_instruction = *(current_block_frame->instruction_pointer++) \
+    
+    #define DECODE_A()  BB_I_DECODE_A(last_instruction)
+    #define DECODE_B()  BB_I_DECODE_B(last_instruction)
+    #define DECODE_C()  BB_I_DECODE_C(last_instruction)
+    #define DECODE_W0() BB_I_DECODE_W0(last_instruction)
+    #define DECODE_W1() BB_I_DECODE_W1(last_instruction)
 
     static void* DISPATCH_TABLE [] = {
         &&DO_HALT,
@@ -148,21 +157,12 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         &&DO_RET_V,
     };
 
-    #define DECODE_NEXT()                                                \
-        last_instruction = *(current_block_frame->instruction_pointer++) \
-
     #define DISPATCH() {                                       \
         DECODE_NEXT();                                         \
         BB_OpCode next = BB_I_DECODE_OPCODE(last_instruction); \
         BB_debug("BB_DISPATCH %d", next);                      \
         goto *DISPATCH_TABLE[next];                            \
     }                                                          \
-
-    #define DECODE_A()  BB_I_DECODE_A(last_instruction)
-    #define DECODE_B()  BB_I_DECODE_B(last_instruction)
-    #define DECODE_C()  BB_I_DECODE_C(last_instruction)
-    #define DECODE_W0() BB_I_DECODE_W0(last_instruction)
-    #define DECODE_W1() BB_I_DECODE_W1(last_instruction)
     
     DISPATCH();
 
@@ -321,7 +321,6 @@ BB_Trap BB_invoke(BB_Fiber *restrict fiber, BB_FunctionIndex functionIndex, uint
        ) {
         return BB_TRAP_STACK_OVERFLOW;
     }
-
     
     BB_InstructionPointer wrapper_blocks[1] = { 0 };
     BB_Instruction wrapper_instructions[] = { BB_I_ENCODE_0(BB_HALT) };
@@ -348,7 +347,6 @@ BB_Trap BB_invoke(BB_Fiber *restrict fiber, BB_FunctionIndex functionIndex, uint
     for (uint8_t i = 0; i < function->num_args; i++) {
         *(call_frame.stack_base + i) = args[i];
     }
-
 
     BB_Trap result = BB_eval(fiber);
 
@@ -385,7 +383,6 @@ BB_InstructionPointer BB_encode_instr (BB_Encoder* encoder, BB_Instruction instr
     for (size_t i = 0; i < sizeof(BB_Instruction); i++) stbds_arrpush(*encoder, bytes[i]);
     return offset;
 }
-
 
 BB_InstructionPointer BB_encode_0 (BB_Encoder* encoder, BB_OpCode opcode) {
     BB_debug("BB_encode_0 %s", BB_opcode_name(opcode));
@@ -437,8 +434,6 @@ void BB_encode_registers (BB_Encoder* encoder, BB_RegisterIndex num_registers, B
     BB_debug("adding %lu padding", padding);
     for (size_t i = 0; i < padding; i++) stbds_arrpush(*encoder, 0);
 }
-
-
 
 void BB_disas(BB_Function const* functions, BB_InstructionPointer const* blocks, BB_Instruction const* instructions) {
     BB_BlockIndex to_disas [BB_MAX_BLOCKS] = {};
