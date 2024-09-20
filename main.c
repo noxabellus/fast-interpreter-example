@@ -537,14 +537,6 @@ void BB_disas(BB_Function const* functions, BB_InstructionPointer const* blocks,
 }
 
 
-uint64_t native_fib(uint64_t n) {
-    if (n < 2) {
-        return n;
-    }
-
-    return native_fib(n - 1) + native_fib(n - 2);
-}
-
 int main (int argc, char** argv) {
     BB_Encoder instructions = NULL;
 
@@ -611,7 +603,7 @@ int main (int argc, char** argv) {
 
     uint64_t ret_val = 0xdeadbeef;
     uint64_t n = 32;
-    uint64_t expected = native_fib(n);
+    uint64_t expected = 2178309;
 
     clock_t start = clock();
     BB_Trap result = BB_invoke(&fiber, 0, &ret_val, (uint64_t[]){n});
