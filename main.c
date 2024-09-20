@@ -81,9 +81,7 @@ typedef struct {
     BB_Function const* functions;
     BB_FunctionIndex num_functions;
 
-    BB_GlobalBaseOffset const* globals;
-    uint8_t* global_memory;
-    BB_GlobalIndex num_globals;
+    uint8_t* const* globals;
 } BB_Program;
 
 typedef struct {
@@ -183,7 +181,7 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         BB_RegisterIndex destination = DECODE_W1();
 
         *(current_call_frame->stack_base + destination) =
-            *((uint64_t*) (fiber->program->global_memory + fiber->program->globals[index]));
+            *((uint64_t*) fiber->program->globals[index]);
         
         DISPATCH();
     };
@@ -575,7 +573,7 @@ int main (int argc, char** argv) {
     // BB_disas(&function, blocks, (BB_Instruction const*) instructions);
 
     uint8_t global_memory[sizeof(int64_t) * 2];
-    BB_GlobalBaseOffset globals[2] = {0, sizeof(int64_t)};
+    uint8_t* globals[2] = {global_memory, global_memory + sizeof(int64_t)};
 
     memcpy(global_memory, &(int64_t){1}, sizeof(int64_t));
     memcpy(global_memory + sizeof(int64_t), &(int64_t){2}, sizeof(int64_t));
@@ -584,8 +582,6 @@ int main (int argc, char** argv) {
         .functions = &function,
         .num_functions = 1,
         .globals = globals,
-        .global_memory = global_memory,
-        .num_globals = 2,
     };
 
     uint64_t* data_stack = malloc(BB_STACK_SIZE);
