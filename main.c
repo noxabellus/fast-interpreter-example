@@ -45,33 +45,43 @@ typedef ENUM_T(uint8_t) {
     BB_IF_NZ,          // 8(c) + 8(B) + 8(B) + 8(I) = 32
     BB_F_ADD_32,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_F_SUB_32,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
+    BB_F_SUB_IM_A_32,  // 8(c) + 8(I) + 8(I) + 8(I) = 32
+    BB_F_SUB_IM_B_32,  // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_F_ADD_64,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_F_SUB_64,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_I_ADD_64,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_I_SUB_64,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_F_LT_32,        // 8(c) + 8(I) + 8(I) + 8(I) = 32
+    BB_F_LT_IM_A_32,  // 8(c) + 8(I) + 8(I) + 8(I) = 32
+    BB_F_LT_IM_B_32,  // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_F_LT_64,        // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_S_LT_64,        // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_CALL_V,         // 8(c) + 8(I) = 16
     BB_RET_V,          // 8(c) + 8(I) = 16
 } BB_OpCode;
 
-#define BB_I_ENCODE_0(op)          ((BB_Instruction) op)
-#define BB_I_ENCODE_1(op, a)       (BB_I_ENCODE_0(op) | (((BB_Instruction) a) << 24))
-#define BB_I_ENCODE_2(op, a, b)    (BB_I_ENCODE_1(op, a) | (((BB_Instruction) b) << 16))
-#define BB_I_ENCODE_3(op, a, b, c) (BB_I_ENCODE_2(op, a, b) | (((BB_Instruction) c) <<  8))
-#define BB_I_ENCODE_W0(op, w)      (BB_I_ENCODE_0(op) | (((BB_Instruction) w) << 24))
-#define BB_I_ENCODE_W1(op, w, a)   (BB_I_ENCODE_W0(op, w) | (((BB_Instruction) a) <<  8))
 
-#define BB_I_DECODE_OPCODE(op)     ((BB_OpCode) (op & 0xFF))
-#define BB_I_DECODE_A(op)          ((uint8_t)   ((op >> 24) & 0xFF))
-#define BB_I_DECODE_B(op)          ((uint8_t)   ((op >> 16) & 0xFF))
-#define BB_I_DECODE_C(op)          ((uint8_t)   ((op >>  8) & 0xFF))
-#define BB_I_DECODE_W0(op)         ((uint16_t)  ((op >> 24) & 0xFFFF))
-#define BB_I_DECODE_W1(op)         ((uint8_t)   ((op >>  8) & 0xFF))
+#define BB_BITCAST(A, B, v) ((union { A a; B b;}){.a = v}).b
 
-#define BB_ALIGNMENT_DELTA(base_address, alignment) ((alignment - (base_address % alignment)) % alignment)
-#define BB_CALC_ARG_SIZE(num_args) ((num_args + BB_ALIGNMENT_DELTA(num_args, alignof(BB_Instruction))) / alignof(BB_Instruction))
+#define BB_I_ENCODE_0(op)            ((BB_Instruction) (op))
+#define BB_I_ENCODE_1(op, a)         (BB_I_ENCODE_0(op) | (((BB_Instruction) (a)) << 24))
+#define BB_I_ENCODE_2(op, a, b)      (BB_I_ENCODE_1(op, a) | (((BB_Instruction) (b)) << 16))
+#define BB_I_ENCODE_3(op, a, b, c)   (BB_I_ENCODE_2(op, a, b) | (((BB_Instruction) (c)) <<  8))
+#define BB_I_ENCODE_W0(op, w)        (BB_I_ENCODE_0(op) | (((BB_Instruction) (w)) << 24))
+#define BB_I_ENCODE_W1(op, w, a)     (BB_I_ENCODE_W0(op, w) | (((BB_Instruction) (a)) <<  8))
+#define BB_I_ENCODE_IMM(T, op, imm)  ((BB_BITCAST(T, BB_Instruction, imm) << 32) | (op))
+
+#define BB_I_DECODE_OPCODE(op) ((BB_OpCode) ((op) & 0xFF))
+#define BB_I_DECODE_A(op)      ((uint8_t)   (((op) >> 24) & 0xFF))
+#define BB_I_DECODE_B(op)      ((uint8_t)   (((op) >> 16) & 0xFF))
+#define BB_I_DECODE_C(op)      ((uint8_t)   (((op) >>  8) & 0xFF))
+#define BB_I_DECODE_W0(op)     ((uint16_t)  (((op) >> 24) & 0xFFFF))
+#define BB_I_DECODE_W1(op)     ((uint8_t)   (((op) >>  8) & 0xFF))
+#define BB_I_DECODE_IMM(T, op) BB_BITCAST(BB_Instruction, T, ((op) >> 32) & 0xFFFFFFFF)
+
+
+#define BB_ALIGNMENT_DELTA(base_address, alignment) (((alignment) - ((base_address) % (alignment))) % (alignment))
+#define BB_CALC_ARG_SIZE(num_args) (((num_args) + BB_ALIGNMENT_DELTA((num_args), alignof(BB_Instruction))) / alignof(BB_Instruction))
 
 typedef struct {
     BB_InstructionPointer const* blocks;
@@ -156,11 +166,15 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         &&DO_IF_NZ,             //BB_IF_NZ
         &&DO_F_ADD_32,          //BB_F_ADD_32
         &&DO_F_SUB_32,          //BB_F_SUB_32
+        &&DO_F_SUB_IM_A_32,     //BB_F_SUB_IM_A_32
+        &&DO_F_SUB_IM_B_32,     //BB_F_SUB_IM_B_32
         &&DO_F_ADD_64,          //BB_F_ADD_64
         &&DO_F_SUB_64,          //BB_F_SUB_64
         &&DO_I_ADD_64,          //BB_I_ADD_64
         &&DO_I_SUB_64,          //BB_I_SUB_64
         &&DO_F_LT_32,           //BB_F_LT_32
+        &&DO_F_LT_IM_A_32,      //BB_F_LT_IM_A_32
+        &&DO_F_LT_IM_B_32,      //BB_F_LT_IM_B_32
         &&DO_F_LT_64,           //BB_F_LT_64
         &&DO_S_LT_64,           //BB_S_LT_64
         &&DO_CALL_V,            //BB_CALL_V
@@ -261,6 +275,32 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         DISPATCH();
     };
 
+    DO_F_SUB_IM_A_32: {
+        BB_debug("BB_F_SUB_IM_A_32");
+
+        float x = BB_I_DECODE_IMM(float, last_instruction);
+        BB_RegisterIndex y = DECODE_A();
+        BB_RegisterIndex z = DECODE_B();
+
+        *((float*) (current_call_frame->stack_base + z)) =
+            x - *((float*) (current_call_frame->stack_base + y));
+        
+        DISPATCH();
+    };
+
+    DO_F_SUB_IM_B_32: {
+        BB_debug("BB_F_SUB_IM_B_32");
+
+        float y = BB_I_DECODE_IMM(float, last_instruction);
+        BB_RegisterIndex x = DECODE_A();
+        BB_RegisterIndex z = DECODE_B();
+
+        *((float*) (current_call_frame->stack_base + z)) =
+            *((float*) (current_call_frame->stack_base + x)) - y;
+        
+        DISPATCH();
+    };
+
     DO_F_ADD_64: {
         BB_debug("BB_F_ADD_64");
 
@@ -327,6 +367,32 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         *((uint8_t*) (current_call_frame->stack_base + z)) =
             *((float*) (current_call_frame->stack_base + x)) <
             *((float*) (current_call_frame->stack_base + y));
+
+        DISPATCH();
+    };
+
+    DO_F_LT_IM_A_32: {
+        BB_debug("BB_F_LT_IM_A_32");
+
+        float x = BB_I_DECODE_IMM(float, last_instruction);
+        BB_RegisterIndex y = DECODE_A();
+        BB_RegisterIndex z = DECODE_B();
+
+        *((uint8_t*) (current_call_frame->stack_base + z)) =
+            x < *((float*) (current_call_frame->stack_base + y));
+
+        DISPATCH();
+    };
+
+    DO_F_LT_IM_B_32: {
+        BB_debug("BB_F_LT_IM_B_32");
+
+        float y = BB_I_DECODE_IMM(float, last_instruction);
+        BB_RegisterIndex x = DECODE_A();
+        BB_RegisterIndex z = DECODE_B();
+
+        *((uint8_t*) (current_call_frame->stack_base + z)) =
+            *((float*) (current_call_frame->stack_base + x)) < y;
 
         DISPATCH();
     };
@@ -475,11 +541,15 @@ char const* BB_opcode_name(BB_OpCode op) {
         case BB_IF_NZ: return "IF_NZ";
         case BB_F_ADD_32: return "F_ADD_32";
         case BB_F_SUB_32: return "F_SUB_32";
+        case BB_F_SUB_IM_A_32: return "F_SUB_IM_A_32";
+        case BB_F_SUB_IM_B_32: return "F_SUB_IM_B_32";
         case BB_F_ADD_64: return "F_ADD_64";
         case BB_F_SUB_64: return "F_SUB_64";
         case BB_I_ADD_64: return "I_ADD_64";
         case BB_I_SUB_64: return "I_SUB_64";
         case BB_F_LT_32: return "F_LT_32";
+        case BB_F_LT_IM_A_32: return "F_LT_IM_A_32";
+        case BB_F_LT_IM_B_32: return "F_LT_IM_B_32";
         case BB_F_LT_64: return "F_LT_64";
         case BB_S_LT_64: return "S_LT_64";
         case BB_CALL_V: return "CALL_V";
@@ -536,6 +606,48 @@ BB_InstructionPointer BB_encode_w1 (BB_Encoder* encoder, BB_OpCode opcode, uint1
     BB_debug("BB_encode_w1 %s %d %d", BB_opcode_name(opcode), w, a);
     BB_Instruction e = BB_I_ENCODE_W1(opcode, w, a);
     BB_debug("\t%s %d %d", BB_opcode_name(BB_I_DECODE_OPCODE(e)), BB_I_DECODE_W0(e), BB_I_DECODE_W1(e));
+    return BB_encode_instr(encoder, e);
+}
+
+BB_InstructionPointer BB_encode_0_im (BB_Encoder* encoder, BB_OpCode opcode, uint32_t im) {
+    BB_debug("BB_encode_0_im %s %u", BB_opcode_name(opcode), im);
+    BB_Instruction e = BB_I_ENCODE_IMM(uint32_t, BB_I_ENCODE_0(opcode), im);
+    BB_debug("\t%s %u", BB_opcode_name(BB_I_DECODE_OPCODE(e)), BB_I_DECODE_IMM(uint32_t, e));
+    return BB_encode_instr(encoder, e);
+}
+
+BB_InstructionPointer BB_encode_1_im (BB_Encoder* encoder, BB_OpCode opcode, uint32_t im, uint8_t a) {
+    BB_debug("BB_encode_1_im %s %d %u", BB_opcode_name(opcode), a, im);
+    BB_Instruction e = BB_I_ENCODE_IMM(uint32_t, BB_I_ENCODE_1(opcode, a), im);
+    BB_debug("\t%s %d %u", BB_opcode_name(BB_I_DECODE_OPCODE(e)), BB_I_DECODE_A(e), BB_I_DECODE_IMM(uint32_t, e));
+    return BB_encode_instr(encoder, e);
+}
+
+BB_InstructionPointer BB_encode_2_im (BB_Encoder* encoder, BB_OpCode opcode, uint32_t im, uint8_t a, uint8_t b) {
+    BB_debug("BB_encode_2_im %s %d %d %u", BB_opcode_name(opcode), a, b, im);
+    BB_Instruction e = BB_I_ENCODE_IMM(uint32_t, BB_I_ENCODE_2(opcode, a, b), im);
+    BB_debug("\t%s %d %d %u", BB_opcode_name(BB_I_DECODE_OPCODE(e)), BB_I_DECODE_A(e), BB_I_DECODE_B(e), BB_I_DECODE_IMM(uint32_t, e));
+    return BB_encode_instr(encoder, e);
+}
+
+BB_InstructionPointer BB_encode_3_im (BB_Encoder* encoder, BB_OpCode opcode, uint32_t im, uint8_t a, uint8_t b, uint8_t c) {
+    BB_debug("BB_encode_3_im %s %d %d %d %u", BB_opcode_name(opcode), a, b, c, im);
+    BB_Instruction e = BB_I_ENCODE_IMM(uint32_t, BB_I_ENCODE_3(opcode, a, b, c), im);
+    BB_debug("\t%s %d %d %d %u", BB_opcode_name(BB_I_DECODE_OPCODE(e)), BB_I_DECODE_A(e), BB_I_DECODE_B(e), BB_I_DECODE_C(e), BB_I_DECODE_IMM(uint32_t, e));
+    return BB_encode_instr(encoder, e);
+}
+
+BB_InstructionPointer BB_encode_w0_im (BB_Encoder* encoder, BB_OpCode opcode, uint32_t im, uint16_t w) {
+    BB_debug("BB_encode_w0_im %s %d %u", BB_opcode_name(opcode), w, im);
+    BB_Instruction e = BB_I_ENCODE_IMM(uint32_t, BB_I_ENCODE_W0(opcode, w), im);
+    BB_debug("\t%s %d %u", BB_opcode_name(BB_I_DECODE_OPCODE(e)), BB_I_DECODE_W0(e), BB_I_DECODE_IMM(uint32_t, e));
+    return BB_encode_instr(encoder, e);
+}
+
+BB_InstructionPointer BB_encode_w1_im (BB_Encoder* encoder, BB_OpCode opcode, uint32_t im, uint16_t w, uint8_t a) {
+    BB_debug("BB_encode_w1_im %s %d %d %u", BB_opcode_name(opcode), w, a, im);
+    BB_Instruction e = BB_I_ENCODE_IMM(uint32_t, BB_I_ENCODE_W1(opcode, w, a), im);
+    BB_debug("\t%s %d %d %u", BB_opcode_name(BB_I_DECODE_OPCODE(e)), BB_I_DECODE_W0(e), BB_I_DECODE_W1(e), BB_I_DECODE_IMM(uint32_t, e));
     return BB_encode_instr(encoder, e);
 }
 
@@ -613,6 +725,20 @@ void BB_disas(BB_Function const* functions, BB_InstructionPointer const* blocks,
                     printf(" r%d r%d r%d", x, y, z);
                 } break;
 
+                case BB_F_SUB_IM_A_32: {
+                    float x = BB_I_DECODE_IMM(float, instr);
+                    BB_RegisterIndex y = BB_I_DECODE_A(instr);
+                    BB_RegisterIndex z = BB_I_DECODE_B(instr);
+                    printf(" %f r%d r%d", x, y, z);
+                } break;
+
+                case BB_F_SUB_IM_B_32: {
+                    float y = BB_I_DECODE_IMM(float, instr);
+                    BB_RegisterIndex x = BB_I_DECODE_A(instr);
+                    BB_RegisterIndex z = BB_I_DECODE_B(instr);
+                    printf(" %f r%d r%d", y, x, z);
+                } break;
+
                 case BB_F_ADD_64: {
                     BB_RegisterIndex x = BB_I_DECODE_A(instr);
                     BB_RegisterIndex y = BB_I_DECODE_B(instr);
@@ -646,6 +772,20 @@ void BB_disas(BB_Function const* functions, BB_InstructionPointer const* blocks,
                     BB_RegisterIndex y = BB_I_DECODE_B(instr);
                     BB_RegisterIndex z = BB_I_DECODE_C(instr);
                     printf(" r%d r%d r%d", x, y, z);
+                } break;
+
+                case BB_F_LT_IM_A_32: {
+                    float x = BB_I_DECODE_IMM(float, instr);
+                    BB_RegisterIndex y = BB_I_DECODE_A(instr);
+                    BB_RegisterIndex z = BB_I_DECODE_B(instr);
+                    printf(" %f r%d r%d", x, y, z);
+                } break;
+
+                case BB_F_LT_IM_B_32: {
+                    float y = BB_I_DECODE_IMM(float, instr);
+                    BB_RegisterIndex x = BB_I_DECODE_A(instr);
+                    BB_RegisterIndex z = BB_I_DECODE_B(instr);
+                    printf(" %f r%d r%d", y, x, z);
                 } break;
 
                 case BB_F_LT_64: {
@@ -697,27 +837,25 @@ void BB_disas(BB_Function const* functions, BB_InstructionPointer const* blocks,
     }
 }
 
-#define BB_BITCAST(A, B, v) ((union { A a; B b;}){.a = v}).b
-
 int main (int argc, char** argv) {
     BB_Encoder instructions = NULL;
 
-    BB_InstructionPointer entry_block =
-        BB_encode_w1(&instructions, BB_READ_GLOBAL_32, 0, 1);
-        BB_encode_w1(&instructions, BB_READ_GLOBAL_32, 1, 2);
+    uint32_t one = BB_BITCAST(float, uint32_t, 1.0);
+    uint32_t two = BB_BITCAST(float, uint32_t, 2.0);
 
-        BB_encode_3(&instructions, BB_F_LT_32, 0, 2, 3);
+    BB_InstructionPointer entry_block =
+        BB_encode_2_im(&instructions, BB_F_LT_IM_B_32, two, 0, 3);
         BB_encode_3(&instructions, BB_IF_NZ, 1, 2, 3);
 
     BB_InstructionPointer then_block =
         BB_encode_1(&instructions, BB_RET_V, 0);
 
     BB_InstructionPointer else_block =
-        BB_encode_3(&instructions, BB_F_SUB_32, 0, 1, 4);
+        BB_encode_2_im(&instructions, BB_F_SUB_IM_B_32, one, 0, 4);
         BB_encode_w1(&instructions, BB_CALL_V, 0, 4);
         BB_encode_registers(&instructions, 1, (BB_RegisterIndex[]){4});
 
-        BB_encode_3(&instructions, BB_F_SUB_32, 0, 2, 5);
+        BB_encode_2_im(&instructions, BB_F_SUB_IM_B_32, two, 0, 5);
         BB_encode_w1(&instructions, BB_CALL_V, 0, 5);
         BB_encode_registers(&instructions, 1, (BB_RegisterIndex[]){5});
 
@@ -736,15 +874,15 @@ int main (int argc, char** argv) {
 
     // BB_disas(&function, blocks, (BB_Instruction const*) instructions);
 
-    uint8_t global_memory[sizeof(float) * 2];
-    uint8_t* globals[2] = {global_memory, global_memory + sizeof(float)};
+    // uint8_t global_memory[sizeof(float) * 2];
+    // uint8_t* globals[2] = {global_memory, global_memory + sizeof(float)};
 
-    memcpy(global_memory, &(float){1.0}, sizeof(float));
-    memcpy(global_memory + sizeof(float), &(float){2.0}, sizeof(float));
+    // memcpy(global_memory, &(float){1.0}, sizeof(float));
+    // memcpy(global_memory + sizeof(float), &(float){2.0}, sizeof(float));
 
     BB_Program program = {
         .functions = &function,
-        .globals = globals,
+        .globals = NULL,
     };
 
     uint64_t* data_stack = malloc(BB_STACK_SIZE);
