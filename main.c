@@ -40,12 +40,16 @@ typedef uint32_t BB_StackPtr;
 typedef ENUM_T(uint8_t) {
     BB_HALT,           // 8(c) = 8
     BB_UNREACHABLE,    // 8(c) = 8
+    BB_READ_GLOBAL_32, // 8(c) + 16(G) + 8(I) = 32
     BB_READ_GLOBAL_64, // 8(c) + 16(G) + 8(I) = 32
     BB_IF_NZ,          // 8(c) + 8(B) + 8(B) + 8(I) = 32
+    BB_F_ADD_32,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
+    BB_F_SUB_32,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_F_ADD_64,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_F_SUB_64,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_I_ADD_64,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_I_SUB_64,       // 8(c) + 8(I) + 8(I) + 8(I) = 32
+    BB_F_LT_32,        // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_F_LT_64,        // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_S_LT_64,        // 8(c) + 8(I) + 8(I) + 8(I) = 32
     BB_CALL_V,         // 8(c) + 8(I) = 16
@@ -145,18 +149,22 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
     #define DECODE_W1() BB_I_DECODE_W1(last_instruction)
 
     static void* DISPATCH_TABLE [] = {
-        &&DO_HALT,
-        &&DO_UNREACHABLE,
-        &&DO_READ_GLOBAL_64,
-        &&DO_IF_NZ,
-        &&DO_F_ADD_64,
-        &&DO_F_SUB_64,
-        &&DO_I_ADD_64,
-        &&DO_I_SUB_64,
-        &&DO_F_LT_64,
-        &&DO_S_LT_64,
-        &&DO_CALL_V,
-        &&DO_RET_V,
+        &&DO_HALT,              //BB_HALT
+        &&DO_UNREACHABLE,       //BB_UNREACHABLE
+        &&DO_READ_GLOBAL_32,    //BB_READ_GLOBAL_32
+        &&DO_READ_GLOBAL_64,    //BB_READ_GLOBAL_64
+        &&DO_IF_NZ,             //BB_IF_NZ
+        &&DO_F_ADD_32,          //BB_F_ADD_32
+        &&DO_F_SUB_32,          //BB_F_SUB_32
+        &&DO_F_ADD_64,          //BB_F_ADD_64
+        &&DO_F_SUB_64,          //BB_F_SUB_64
+        &&DO_I_ADD_64,          //BB_I_ADD_64
+        &&DO_I_SUB_64,          //BB_I_SUB_64
+        &&DO_F_LT_32,           //BB_F_LT_32
+        &&DO_F_LT_64,           //BB_F_LT_64
+        &&DO_S_LT_64,           //BB_S_LT_64
+        &&DO_CALL_V,            //BB_CALL_V
+        &&DO_RET_V,             //BB_RET_V
     };
 
     #define DISPATCH() {                                       \
@@ -176,6 +184,18 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
     DO_UNREACHABLE: {
         BB_debug("BB_UNREACHABLE");
         return BB_TRAP_UNREACHABLE;
+    };
+
+    DO_READ_GLOBAL_32: {
+        BB_debug("BB_READ_GLOBAL_32");
+
+        BB_GlobalIndex index = DECODE_W0();
+        BB_RegisterIndex destination = DECODE_W1();
+
+        *(current_call_frame->stack_base + destination) =
+            *((uint32_t*) fiber->program->globals[index]);
+        
+        DISPATCH();
     };
 
     DO_READ_GLOBAL_64: {
@@ -210,6 +230,34 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
         *(++fiber->block_stack) = new_block_frame;
 
         SET_CONTEXT();
+        DISPATCH();
+    };
+
+    DO_F_ADD_32: {
+        BB_debug("BB_F_ADD_32");
+
+        BB_RegisterIndex x = DECODE_A();
+        BB_RegisterIndex y = DECODE_B();
+        BB_RegisterIndex z = DECODE_C();
+
+        *((float*) (current_call_frame->stack_base + z)) =
+            *((float*) (current_call_frame->stack_base + x)) +
+            *((float*) (current_call_frame->stack_base + y));
+
+        DISPATCH();
+    };
+
+    DO_F_SUB_32: {
+        BB_debug("BB_F_SUB_32");
+
+        BB_RegisterIndex x = DECODE_A();
+        BB_RegisterIndex y = DECODE_B();
+        BB_RegisterIndex z = DECODE_C();
+
+        *((float*) (current_call_frame->stack_base + z)) =
+            *((float*) (current_call_frame->stack_base + x)) -
+            *((float*) (current_call_frame->stack_base + y));
+        
         DISPATCH();
     };
 
@@ -266,6 +314,20 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
             *(current_call_frame->stack_base + x) -
             *(current_call_frame->stack_base + y);
         
+        DISPATCH();
+    };
+
+    DO_F_LT_32: {
+        BB_debug("BB_F_LT_32");
+
+        BB_RegisterIndex x = DECODE_A();
+        BB_RegisterIndex y = DECODE_B();
+        BB_RegisterIndex z = DECODE_C();
+
+        *((uint8_t*) (current_call_frame->stack_base + z)) =
+            *((float*) (current_call_frame->stack_base + x)) <
+            *((float*) (current_call_frame->stack_base + y));
+
         DISPATCH();
     };
 
@@ -408,12 +470,17 @@ char const* BB_opcode_name(BB_OpCode op) {
     switch (op) {
         case BB_HALT: return "HALT";
         case BB_UNREACHABLE: return "UNREACHABLE";
+        case BB_READ_GLOBAL_32: return "READ_GLOBAL_32";
         case BB_READ_GLOBAL_64: return "READ_GLOBAL_64";
         case BB_IF_NZ: return "IF_NZ";
+        case BB_F_ADD_32: return "F_ADD_32";
+        case BB_F_SUB_32: return "F_SUB_32";
         case BB_F_ADD_64: return "F_ADD_64";
         case BB_F_SUB_64: return "F_SUB_64";
         case BB_I_ADD_64: return "I_ADD_64";
         case BB_I_SUB_64: return "I_SUB_64";
+        case BB_F_LT_32: return "F_LT_32";
+        case BB_F_LT_64: return "F_LT_64";
         case BB_S_LT_64: return "S_LT_64";
         case BB_CALL_V: return "CALL_V";
         case BB_RET_V: return "RET_V";
@@ -510,6 +577,12 @@ void BB_disas(BB_Function const* functions, BB_InstructionPointer const* blocks,
                     block_done = true;
                 } break;
 
+                case BB_READ_GLOBAL_32: {
+                    BB_GlobalIndex index = BB_I_DECODE_W0(instr);
+                    BB_RegisterIndex destination = BB_I_DECODE_W1(instr);
+                    printf(" g%d r%d", index, destination);
+                } break;
+
                 case BB_READ_GLOBAL_64: {
                     BB_GlobalIndex index = BB_I_DECODE_W0(instr);
                     BB_RegisterIndex destination = BB_I_DECODE_W1(instr);
@@ -524,6 +597,20 @@ void BB_disas(BB_Function const* functions, BB_InstructionPointer const* blocks,
                     DISAS_BLOCK(else_index);
                     DISAS_BLOCK(then_index);
                     block_done = true;
+                } break;
+
+                case BB_F_ADD_32: {
+                    BB_RegisterIndex x = BB_I_DECODE_A(instr);
+                    BB_RegisterIndex y = BB_I_DECODE_B(instr);
+                    BB_RegisterIndex z = BB_I_DECODE_C(instr);
+                    printf(" r%d r%d r%d", x, y, z);
+                } break;
+
+                case BB_F_SUB_32: {
+                    BB_RegisterIndex x = BB_I_DECODE_A(instr);
+                    BB_RegisterIndex y = BB_I_DECODE_B(instr);
+                    BB_RegisterIndex z = BB_I_DECODE_C(instr);
+                    printf(" r%d r%d r%d", x, y, z);
                 } break;
 
                 case BB_F_ADD_64: {
@@ -548,6 +635,13 @@ void BB_disas(BB_Function const* functions, BB_InstructionPointer const* blocks,
                 } break;
 
                 case BB_I_SUB_64: {
+                    BB_RegisterIndex x = BB_I_DECODE_A(instr);
+                    BB_RegisterIndex y = BB_I_DECODE_B(instr);
+                    BB_RegisterIndex z = BB_I_DECODE_C(instr);
+                    printf(" r%d r%d r%d", x, y, z);
+                } break;
+
+                case BB_F_LT_32: {
                     BB_RegisterIndex x = BB_I_DECODE_A(instr);
                     BB_RegisterIndex y = BB_I_DECODE_B(instr);
                     BB_RegisterIndex z = BB_I_DECODE_C(instr);
@@ -603,30 +697,31 @@ void BB_disas(BB_Function const* functions, BB_InstructionPointer const* blocks,
     }
 }
 
+#define BB_BITCAST(A, B, v) ((union { A a; B b;}){.a = v}).b
 
 int main (int argc, char** argv) {
     BB_Encoder instructions = NULL;
 
     BB_InstructionPointer entry_block =
-        BB_encode_w1(&instructions, BB_READ_GLOBAL_64, 0, 1);
-        BB_encode_w1(&instructions, BB_READ_GLOBAL_64, 1, 2);
+        BB_encode_w1(&instructions, BB_READ_GLOBAL_32, 0, 1);
+        BB_encode_w1(&instructions, BB_READ_GLOBAL_32, 1, 2);
 
-        BB_encode_3(&instructions, BB_F_LT_64, 0, 2, 3);
+        BB_encode_3(&instructions, BB_F_LT_32, 0, 2, 3);
         BB_encode_3(&instructions, BB_IF_NZ, 1, 2, 3);
 
     BB_InstructionPointer then_block =
         BB_encode_1(&instructions, BB_RET_V, 0);
 
     BB_InstructionPointer else_block =
-        BB_encode_3(&instructions, BB_F_SUB_64, 0, 1, 4);
+        BB_encode_3(&instructions, BB_F_SUB_32, 0, 1, 4);
         BB_encode_w1(&instructions, BB_CALL_V, 0, 4);
         BB_encode_registers(&instructions, 1, (BB_RegisterIndex[]){4});
 
-        BB_encode_3(&instructions, BB_F_SUB_64, 0, 2, 5);
+        BB_encode_3(&instructions, BB_F_SUB_32, 0, 2, 5);
         BB_encode_w1(&instructions, BB_CALL_V, 0, 5);
         BB_encode_registers(&instructions, 1, (BB_RegisterIndex[]){5});
 
-        BB_encode_3(&instructions, BB_F_ADD_64, 4, 5, 5);
+        BB_encode_3(&instructions, BB_F_ADD_32, 4, 5, 5);
         BB_encode_1(&instructions, BB_RET_V, 5);
 
     BB_InstructionPointer blocks [] = {
@@ -641,11 +736,11 @@ int main (int argc, char** argv) {
 
     // BB_disas(&function, blocks, (BB_Instruction const*) instructions);
 
-    uint8_t global_memory[sizeof(double) * 2];
-    uint8_t* globals[2] = {global_memory, global_memory + sizeof(double)};
+    uint8_t global_memory[sizeof(float) * 2];
+    uint8_t* globals[2] = {global_memory, global_memory + sizeof(float)};
 
-    memcpy(global_memory, &(double){1.0}, sizeof(double));
-    memcpy(global_memory + sizeof(double), &(double){2.0}, sizeof(double));
+    memcpy(global_memory, &(float){1.0}, sizeof(float));
+    memcpy(global_memory + sizeof(float), &(float){2.0}, sizeof(float));
 
     BB_Program program = {
         .functions = &function,
@@ -665,19 +760,20 @@ int main (int argc, char** argv) {
         .data_stack_max = data_stack + BB_STACK_SIZE,
     };
 
-    double ret_val = (double) 0xdeadbeef;
-    double n = 32.0;
-    double expected = 2178309;
+    uint64_t ret_val = 0xdeadbeef;
+    uint64_t n = BB_BITCAST(float, uint64_t, 32.0);
+    float expected = 2178309.0;
 
     clock_t start = clock();
-    BB_Trap result = BB_invoke(&fiber, 0, (uint64_t*) &ret_val, (uint64_t*) &n);
+    BB_Trap result = BB_invoke(&fiber, 0, &ret_val, &n);
     clock_t end = clock();
 
     double elapsed = (((double) (end - start)) / ((double) CLOCKS_PER_SEC));
 
     if (result == BB_OKAY) {
-        printf("Result: %f (in %fs)\n", ret_val, elapsed);
-        if (ret_val != expected) {
+        float res = BB_BITCAST(uint64_t, float, ret_val);
+        printf("Result: %f (in %fs)\n", res, elapsed);
+        if (res != expected) {
             return 1;
         }
     } else {
