@@ -7,8 +7,10 @@ zig cc \
     -O3 \
     main.c
 
+time lua ./ack.lua
 time ./ribboni
 
+sudo perf stat -d -r 100 lua ./ack.lua
 sudo perf stat -d -r 100 ./ribboni
 
 # valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes ./ribboni
