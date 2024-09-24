@@ -12,10 +12,42 @@
 
 #define BB_DEBUG_TRACE 0
 
+#define BB_MAX_REGISTERS UINT8_MAX
+#define BB_MAX_BLOCKS UINT8_MAX
+#define BB_MAX_CALL_FRAMES 4096
+#define BB_STACK_SIZE (1024 * 1024)
+
+#define BB_BITCAST(A, B, v) ((union { A a; B b;}){.a = v}).b
+
+#define BB_I_ENCODE_0(op)            ((BB_Instruction) (op))
+#define BB_I_ENCODE_1(op, a)         (BB_I_ENCODE_0(op) | (((BB_Instruction) (a)) << 24))
+#define BB_I_ENCODE_2(op, a, b)      (BB_I_ENCODE_1(op, a) | (((BB_Instruction) (b)) << 16))
+#define BB_I_ENCODE_3(op, a, b, c)   (BB_I_ENCODE_2(op, a, b) | (((BB_Instruction) (c)) <<  8))
+#define BB_I_ENCODE_W0(op, w)        (BB_I_ENCODE_0(op) | (((BB_Instruction) (w)) << 24))
+#define BB_I_ENCODE_W1(op, w, a)     (BB_I_ENCODE_W0(op, w) | (((BB_Instruction) (a)) <<  8))
+#define BB_I_ENCODE_IM32(T, op, imm) ((BB_BITCAST(T, BB_Instruction, imm) << 32) | (op))
+
+#define BB_I_DECODE_OPCODE(op)       ((BB_OpCode) ((op) & 0xFF))
+#define BB_I_DECODE_A(op)            ((uint8_t)   (((op) >> 24) & 0xFF))
+#define BB_I_DECODE_B(op)            ((uint8_t)   (((op) >> 16) & 0xFF))
+#define BB_I_DECODE_C(op)            ((uint8_t)   (((op) >>  8) & 0xFF))
+#define BB_I_DECODE_W0(op)           ((uint16_t)  (((op) >> 24) & 0xFFFF))
+#define BB_I_DECODE_W1(op)           ((uint8_t)   (((op) >>  8) & 0xFF))
+#define BB_I_DECODE_IM32(T, op)      BB_BITCAST(BB_Instruction, T, ((op) >> 32) & 0xFFFFFFFF)
+
+#define BB_ALIGNMENT_DELTA(base_address, alignment) (((alignment) - ((base_address) % (alignment))) % (alignment))
+#define BB_CALC_ARG_SIZE(num_args) (((num_args) + BB_ALIGNMENT_DELTA((num_args), alignof(BB_Instruction))) / alignof(BB_Instruction))
+
 #ifndef __INTELLISENSE__ // intellisense can't handle the backing type attribute
     #define ENUM_T(T) enum : T
 #else
     #define ENUM_T(T) enum
+#endif
+
+#if BB_DEBUG_TRACE
+    #define BB_debug(fmt, ...) fprintf(stderr, fmt "\n", ##__VA_ARGS__)
+#else
+    #define BB_debug(fmt, ...)
 #endif
 
 typedef uint64_t BB_Instruction;
@@ -29,13 +61,6 @@ typedef uint32_t BB_GlobalBaseOffset;
 typedef uint16_t BB_CallFramePtr;
 typedef uint16_t BB_BlockFramePtr;
 typedef uint32_t BB_StackPtr;
-
-
-#define BB_MAX_REGISTERS UINT8_MAX
-#define BB_MAX_BLOCKS UINT8_MAX
-#define BB_MAX_CALL_FRAMES 4096
-#define BB_STACK_SIZE (1024 * 1024)
-
 
 typedef ENUM_T(uint8_t) {
     BB_HALT,
@@ -79,28 +104,12 @@ typedef ENUM_T(uint8_t) {
     BB_RET_V,
 } BB_OpCode;
 
-
-#define BB_BITCAST(A, B, v) ((union { A a; B b;}){.a = v}).b
-
-#define BB_I_ENCODE_0(op)            ((BB_Instruction) (op))
-#define BB_I_ENCODE_1(op, a)         (BB_I_ENCODE_0(op) | (((BB_Instruction) (a)) << 24))
-#define BB_I_ENCODE_2(op, a, b)      (BB_I_ENCODE_1(op, a) | (((BB_Instruction) (b)) << 16))
-#define BB_I_ENCODE_3(op, a, b, c)   (BB_I_ENCODE_2(op, a, b) | (((BB_Instruction) (c)) <<  8))
-#define BB_I_ENCODE_W0(op, w)        (BB_I_ENCODE_0(op) | (((BB_Instruction) (w)) << 24))
-#define BB_I_ENCODE_W1(op, w, a)     (BB_I_ENCODE_W0(op, w) | (((BB_Instruction) (a)) <<  8))
-#define BB_I_ENCODE_IM32(T, op, imm) ((BB_BITCAST(T, BB_Instruction, imm) << 32) | (op))
-
-#define BB_I_DECODE_OPCODE(op)       ((BB_OpCode) ((op) & 0xFF))
-#define BB_I_DECODE_A(op)            ((uint8_t)   (((op) >> 24) & 0xFF))
-#define BB_I_DECODE_B(op)            ((uint8_t)   (((op) >> 16) & 0xFF))
-#define BB_I_DECODE_C(op)            ((uint8_t)   (((op) >>  8) & 0xFF))
-#define BB_I_DECODE_W0(op)           ((uint16_t)  (((op) >> 24) & 0xFFFF))
-#define BB_I_DECODE_W1(op)           ((uint8_t)   (((op) >>  8) & 0xFF))
-#define BB_I_DECODE_IM32(T, op)      BB_BITCAST(BB_Instruction, T, ((op) >> 32) & 0xFFFFFFFF)
-
-#define BB_ALIGNMENT_DELTA(base_address, alignment) (((alignment) - ((base_address) % (alignment))) % (alignment))
-#define BB_CALC_ARG_SIZE(num_args) (((num_args) + BB_ALIGNMENT_DELTA((num_args), alignof(BB_Instruction))) / alignof(BB_Instruction))
-
+typedef ENUM_T(uint8_t) {
+    BB_OKAY,
+    BB_TRAP_UNREACHABLE,
+    BB_TRAP_CALL_OVERFLOW,
+    BB_TRAP_STACK_OVERFLOW,
+} BB_Trap;
 
 typedef struct {
     BB_InstructionPointer const* blocks;
@@ -138,19 +147,6 @@ typedef struct {
     uint64_t* data_stack_max;
     BB_BlockFrame* block_stack;
 } BB_Fiber;
-
-typedef ENUM_T(uint8_t) {
-    BB_OKAY,
-    BB_TRAP_UNREACHABLE,
-    BB_TRAP_CALL_OVERFLOW,
-    BB_TRAP_STACK_OVERFLOW,
-} BB_Trap;
-
-#if BB_DEBUG_TRACE
-    #define BB_debug(fmt, ...) fprintf(stderr, fmt "\n", ##__VA_ARGS__)
-#else
-    #define BB_debug(fmt, ...)
-#endif
 
 BB_Trap BB_eval(BB_Fiber *restrict fiber) {
     BB_debug("BB_eval");
@@ -607,8 +603,8 @@ BB_Trap BB_eval(BB_Fiber *restrict fiber) {
     DO_F_LT_IM_B_32: {
         BB_debug("BB_F_LT_IM_B_32");
 
-        float y = BB_I_DECODE_IM32(float, last_instruction);
         BB_RegisterIndex x = DECODE_A();
+        float y = BB_I_DECODE_IM32(float, last_instruction);
         BB_RegisterIndex z = DECODE_B();
 
         *((uint8_t*) (current_call_frame->stack_base + z)) =
@@ -1399,7 +1395,6 @@ int main (int argc, char** argv) {
             BB_disas(&function, blocks, (BB_Instruction const*) instructions);
         #endif
     }
-
 
     BB_FunctionIndex loop_ack = (BB_FunctionIndex) stbds_arrlenu(functions);
     {
