@@ -3,17 +3,17 @@ set -e
 echo "With zig cc:"
 
 zig cc \
-    -o ribboni \
+    -o interp \
     -O3 \
     main.c
 
 time lua ./ack.lua
-time ./ribboni
+time ./interp
 
 sudo perf stat -d -r 100 lua ./ack.lua
-sudo perf stat -d -r 100 ./ribboni
+sudo perf stat -d -r 100 ./interp
 
-# valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes ./ribboni
+# valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes ./interp
 
 # rm cachegrind.out.*
 
@@ -22,13 +22,13 @@ sudo perf stat -d -r 100 ./ribboni
 
 # gcc \
 #     -O3 \
-#     -o ribboni \
+#     -o interp \
 #     main.c
 
-# time ./ribboni
+# time ./interp
 
-# sudo perf stat -d -r 10 ./ribboni
+# sudo perf stat -d -r 10 ./interp
 
-# valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes ./ribboni
+# valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes ./interp
 
 # rm cachegrind.out.*
