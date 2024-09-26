@@ -7,10 +7,10 @@ zig cc \
     -O3 \
     main.c
 
-time lua ./ack.lua
+# time lua ./ack.lua
 time ./interp
 
-sudo perf stat -d -r 100 lua ./ack.lua
+# sudo perf stat -d -r 100 lua ./ack.lua
 sudo perf stat -d -r 100 ./interp
 
 # valgrind --tool=cachegrind --cache-sim=yes --branch-sim=yes ./interp

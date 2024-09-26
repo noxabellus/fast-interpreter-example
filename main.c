@@ -101,6 +101,7 @@ typedef ENUM_T(uint8_t) {
     S_EQ_IM_64,
     S_LT_64,
     CALL_V,
+    TAIL_CALL_V,
     RET_V,
 } OpCode;
 
@@ -154,6 +155,8 @@ Trap eval(Fiber *restrict fiber) {
     CallFrame* current_call_frame;
     Function const* current_function;
     BlockFrame* current_block_frame;
+
+    uint64_t register_scratch_space [MAX_REGISTERS];
 
     #define SET_CONTEXT() {                              \
         debug("SET_CONTEXT");                      \
@@ -215,15 +218,16 @@ Trap eval(Fiber *restrict fiber) {
         &&DO_S_EQ_IM_64,
         &&DO_S_LT_64,
         &&DO_CALL_V,
+        &&DO_TAIL_CALL_V,
         &&DO_RET_V,
     };
 
-    #define DISPATCH() {                                       \
-        DECODE_NEXT();                                         \
+    #define DISPATCH() {                                 \
+        DECODE_NEXT();                                   \
         OpCode next = I_DECODE_OPCODE(last_instruction); \
         debug("DISPATCH %d", next);                      \
-        goto *DISPATCH_TABLE[next];                            \
-    }                                                          \
+        goto *DISPATCH_TABLE[next];                      \
+    }                                                    \
     
     DISPATCH();
 
@@ -762,6 +766,50 @@ Trap eval(Fiber *restrict fiber) {
         DISPATCH();
     };
 
+    DO_TAIL_CALL_V: {
+        debug("TAIL_CALL_V");
+
+        FunctionIndex functionIndex = DECODE_W0();
+
+        Function const* new_function = fiber->program->functions + functionIndex;
+
+        debug("\t%d %d %d", functionIndex, current_call_frame->root_block->out_index, new_function->num_args);
+
+        int16_t register_delta = ((int16_t) current_function->num_registers) - ((int16_t) new_function->num_registers);
+
+        if ( register_delta < 0
+           & fiber->data_stack + new_function->num_registers - current_function->num_registers >= fiber->data_stack_max
+           ) {
+            return TRAP_STACK_OVERFLOW;
+        }
+
+        RegisterIndex const* args = (RegisterIndex const*) (current_block_frame->instruction_pointer);
+        current_block_frame->instruction_pointer += CALC_ARG_SIZE(new_function->num_args);
+
+        for (RegisterIndex i = 0; i < new_function->num_args; i++) {
+            register_scratch_space[i] =
+                *(current_call_frame->stack_base + args[i]);
+        }
+
+        uint64_t* new_stack_base = current_call_frame->stack_base;
+
+        for (RegisterIndex i = 0; i < new_function->num_registers; i++) {
+            *(new_stack_base + i) = register_scratch_space[i];
+        }
+
+        Instruction const* start = new_function->bytecode.instructions + *new_function->bytecode.blocks;
+
+        fiber->block_stack = current_call_frame->root_block;
+        fiber->block_stack->start_pointer = start;
+        fiber->block_stack->instruction_pointer = start;
+
+        current_call_frame->function = new_function;
+        fiber->data_stack -= register_delta;
+
+        SET_CONTEXT();
+        DISPATCH();
+    };
+
     DO_RET_V: {
         debug("RET_V");
 
@@ -883,6 +931,7 @@ char const* opcode_name(OpCode op) {
         case S_EQ_IM_64: return "S_EQ_IM_64";
         case S_LT_64: return "S_LT_64";
         case CALL_V: return "CALL_V";
+        case TAIL_CALL_V: return "TAIL_CALL_V";
         case RET_V: return "RET_V";
         default: return "INVALID";
     }
@@ -1281,6 +1330,22 @@ void disas(Function const* functions, InstructionPointer const* blocks, Instruct
                     printf(")");
                 } break;
 
+                case TAIL_CALL_V: {
+                    FunctionIndex functionIndex = I_DECODE_W0(instr);
+                    printf(" f%d", functionIndex);
+                    Function const* function = functions + functionIndex;
+                    RegisterIndex const* args = (RegisterIndex const*) (instructions + block + ip);
+                    InstructionPointerOffset offset = CALC_ARG_SIZE(function->num_args);
+                    ip += offset;
+                    printf(" (%d~%d : ", function->num_args, offset);
+                    for (uint8_t i = 0; i < function->num_args; i++) {
+                        printf("r%d", args[i]);
+                        if (i < function->num_args - 1) printf(", ");
+                    }
+                    printf(")");
+                    block_done = true;
+                } break;
+
                 case RET_V: {
                     RegisterIndex y = I_DECODE_A(instr);
                     printf(" r%d", y);
@@ -1361,10 +1426,8 @@ int main (int argc, char** argv) {
             encode_w1(&instructions, CALL_V, ack, n_minus_1);
             encode_registers(&instructions, 2, (RegisterIndex[]){m, n_minus_1});
 
-            encode_w1(&instructions, CALL_V, ack, m_minus_1);
+            encode_w0(&instructions, TAIL_CALL_V, ack);
             encode_registers(&instructions, 2, (RegisterIndex[]){m_minus_1, n_minus_1});
-
-            encode_1(&instructions, RET_V, m_minus_1);
 
         stbds_arrpush(blocks, entry_block);
 
@@ -1380,9 +1443,8 @@ int main (int argc, char** argv) {
             encode_im64(&instructions, one);
             encode_1(&instructions, COPY_IM_64, n);
             encode_im64(&instructions, one);
-            encode_w1(&instructions, CALL_V, ack, m);
+            encode_w0(&instructions, TAIL_CALL_V, ack);
             encode_registers(&instructions, 2, (RegisterIndex[]){m, n});
-            encode_1(&instructions, RET_V, m);
 
         stbds_arrpush(blocks, n_eql_0);
 
